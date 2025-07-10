@@ -1,6 +1,4 @@
-=========================================================
 Tor-Rotator
-=========================================================
 
 A lightweight workflow for Linux that forces a **fresh Tor exit IP
 every minute**, intended for red-teamers and privacy-minded testers who
