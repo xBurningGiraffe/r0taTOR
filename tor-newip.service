@@ -1,0 +1,10 @@
+[Unit]
+Description=Force Tor to build a new circuit (SIGNAL NEWNYM)
+Requires=tor.service
+After=tor.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tor-newip
+User=debian-tor
+Group=debian-tor

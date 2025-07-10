@@ -1,0 +1,11 @@
+[Unit]
+Description=Run tor-newip every minute
+
+[Timer]
+OnBootSec=1min          # first run one minute after boot
+OnUnitActiveSec=60sec   # then every 60 s
+Unit=tor-newip.service
+Persistent=true         # catch up on missed runs after suspend/boot
+
+[Install]
+WantedBy=timers.target
