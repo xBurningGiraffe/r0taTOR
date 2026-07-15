@@ -19,10 +19,13 @@ import ssl
 import struct
 import sys
 import time
+import os
 from typing import Callable, Dict, List, Tuple
 
 
 COOKIE = pathlib.Path("/run/tor/control.authcookie")
+
+CONTROL_PASSWORD = os.environ.get("TOR_CONTROL_PASSWORD", "")
 
 CONTROL_HOST = "127.0.0.1"
 CONTROL_PORT = 19051
@@ -52,23 +55,23 @@ def request_new_circuit() -> int:
     """
     Authenticate to Tor's control port and request a new circuit.
     """
-    if not COOKIE.exists() or COOKIE.stat().st_size != 32:
+    if not CONTROL_PASSWORD:
         print(
-            "tor-newip: control_authcookie missing or wrong size",
+            "tor-newip: TOR_CONTROL_PASSWORD is not set",
             file=sys.stderr,
-        )
-        return 2
-
-    cookie_hex = COOKIE.read_bytes().hex()
+    )
+    return 2
 
     try:
         with socket.create_connection(
             (CONTROL_HOST, CONTROL_PORT),
             timeout=4.0,
         ) as sock:
+            escaped_password = CONTROL_PASSWORD.replace("\\", "\\\\").replace('"', '\\"')
+
             authentication_reply = _ctl(
                 sock,
-                "AUTHENTICATE {}".format(cookie_hex),
+                'AUTHENTICATE "{}"'.format(escaped_password),
             )
 
             if not authentication_reply.startswith(b"250"):
