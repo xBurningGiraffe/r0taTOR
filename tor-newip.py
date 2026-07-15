@@ -16,7 +16,7 @@ import ssl
 import struct
 import sys
 import time
-from typing import Callable
+from typing import Callable, Dict
 
 COOKIE = pathlib.Path("/run/tor/control.authcookie")
 CONTROL_HOST, CONTROL_PORT = "127.0.0.1", 9051
@@ -191,7 +191,7 @@ def _parse_plain(body: bytes) -> str:
     return body.decode("utf-8").strip()
 
 
-PARSERS: dict[str, Callable[[bytes], str]] = {
+PARSERS: Dict[str, Callable[[bytes], str]] = {
     "json_ipify": _parse_ipify,
     "json_torproject": _parse_torproject,
     "plain": _parse_plain,
