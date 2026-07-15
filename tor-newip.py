@@ -16,12 +16,18 @@ import ssl
 import struct
 import sys
 import time
+from typing import Callable
 
 COOKIE = pathlib.Path("/run/tor/control.authcookie")
 CONTROL_HOST, CONTROL_PORT = "127.0.0.1", 9051
 SOCKS_HOST, SOCKS_PORT = "127.0.0.1", 9050
-IP_CHECK_HOST = "check.torproject.org"
-IP_CHECK_PATH = "/api/ip"
+NETWORK_TIMEOUT = 15.0
+
+IP_ENDPOINTS = (
+    ("api.ipify.org", "/?format=json", "json_ipify"),
+    ("check.torproject.org", "/api/ip", "json_torproject"),
+    ("icanhazip.com", "/", "plain"),
+)
 
 
 def _ctl(sock: socket.socket, line: str) -> bytes:
@@ -68,8 +74,9 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes:
 
 def _open_socks5_connection(host: str, port: int) -> socket.socket:
     """Open a TCP connection to host:port through the local Tor SOCKS5 proxy."""
-    sock = socket.create_connection((SOCKS_HOST, SOCKS_PORT), timeout=8.0)
+    sock = socket.create_connection((SOCKS_HOST, SOCKS_PORT), timeout=NETWORK_TIMEOUT)
     try:
+        sock.settimeout(NETWORK_TIMEOUT)
         sock.sendall(b"\x05\x01\x00")
         if _recv_exact(sock, 2) != b"\x05\x00":
             raise OSError("Tor SOCKS proxy rejected unauthenticated SOCKS5")
@@ -102,18 +109,44 @@ def _open_socks5_connection(host: str, port: int) -> socket.socket:
         raise
 
 
-def get_tor_exit_ip() -> str:
-    """Return the current Tor exit IP after verifying the request used Tor."""
-    raw_sock = _open_socks5_connection(IP_CHECK_HOST, 443)
+def _decode_chunked(body: bytes) -> bytes:
+    """Decode an HTTP/1.1 chunked response body."""
+    output = bytearray()
+    remainder = body
+
+    while True:
+        line, separator, remainder = remainder.partition(b"\r\n")
+        if not separator:
+            raise OSError("invalid chunked HTTP response")
+
+        try:
+            chunk_size = int(line.split(b";", 1)[0], 16)
+        except ValueError as exc:
+            raise OSError("invalid HTTP chunk size") from exc
+
+        if chunk_size == 0:
+            return bytes(output)
+
+        if len(remainder) < chunk_size + 2:
+            raise OSError("truncated chunked HTTP response")
+
+        output.extend(remainder[:chunk_size])
+        remainder = remainder[chunk_size + 2 :]
+
+
+def _https_get_through_tor(host: str, path: str) -> bytes:
+    """Perform an HTTPS GET through Tor and return the decoded response body."""
+    raw_sock = _open_socks5_connection(host, 443)
     context = ssl.create_default_context()
 
     try:
-        with context.wrap_socket(raw_sock, server_hostname=IP_CHECK_HOST) as tls_sock:
+        with context.wrap_socket(raw_sock, server_hostname=host) as tls_sock:
+            tls_sock.settimeout(NETWORK_TIMEOUT)
             request = (
-                f"GET {IP_CHECK_PATH} HTTP/1.1\r\n"
-                f"Host: {IP_CHECK_HOST}\r\n"
-                "User-Agent: r0taTOR/1.0\r\n"
-                "Accept: application/json\r\n"
+                f"GET {path} HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "User-Agent: r0taTOR/1.1\r\n"
+                "Accept: application/json,text/plain\r\n"
                 "Connection: close\r\n\r\n"
             )
             tls_sock.sendall(request.encode("ascii"))
@@ -130,29 +163,59 @@ def get_tor_exit_ip() -> str:
 
     headers, separator, body = bytes(response).partition(b"\r\n\r\n")
     if not separator:
-        raise OSError("invalid HTTP response from Tor Project IP service")
+        raise OSError("invalid HTTP response")
 
     status_line = headers.split(b"\r\n", 1)[0]
     if b" 200 " not in status_line:
-        raise OSError(f"Tor Project IP service returned {status_line.decode(errors='replace')}")
+        raise OSError(f"service returned {status_line.decode(errors='replace')}")
 
+    lower_headers = headers.lower()
+    if b"transfer-encoding: chunked" in lower_headers:
+        body = _decode_chunked(body)
+
+    return body
+
+
+def _parse_ipify(body: bytes) -> str:
+    return str(json.loads(body.decode("utf-8")).get("ip", "")).strip()
+
+
+def _parse_torproject(body: bytes) -> str:
     payload = json.loads(body.decode("utf-8"))
-    ip_text = str(payload.get("IP", "")).strip()
-    is_tor = payload.get("IsTor")
+    if payload.get("IsTor") is not True:
+        raise OSError("Tor Project did not confirm that the request used Tor")
+    return str(payload.get("IP", "")).strip()
 
-    try:
-        ipaddress.ip_address(ip_text)
-    except ValueError as exc:
-        raise OSError("Tor Project IP service returned an invalid IP address") from exc
 
-    if is_tor is not True:
-        raise OSError("IP check did not confirm that the connection used Tor")
+def _parse_plain(body: bytes) -> str:
+    return body.decode("utf-8").strip()
 
-    return ip_text
+
+PARSERS: dict[str, Callable[[bytes], str]] = {
+    "json_ipify": _parse_ipify,
+    "json_torproject": _parse_torproject,
+    "plain": _parse_plain,
+}
+
+
+def get_tor_exit_ip() -> str:
+    """Return the current exit IP observed through the local Tor SOCKS proxy."""
+    errors = []
+
+    for host, path, parser_name in IP_ENDPOINTS:
+        try:
+            body = _https_get_through_tor(host, path)
+            ip_text = PARSERS[parser_name](body)
+            ipaddress.ip_address(ip_text)
+            return ip_text
+        except (OSError, ssl.SSLError, json.JSONDecodeError, ValueError) as exc:
+            errors.append(f"{host}: {exc}")
+
+    raise OSError("all IP services failed; " + "; ".join(errors))
 
 
 def show_current_ip() -> int:
-    """Print the current verified Tor exit IP."""
+    """Print the current Tor exit IP."""
     try:
         print(f"Current Tor Exit IP: {get_tor_exit_ip()}")
         return 0
@@ -201,7 +264,7 @@ def parse_args() -> argparse.Namespace:
         "-i",
         "--ip",
         action="store_true",
-        help="display the current verified Tor exit IP without rotating",
+        help="display the current Tor exit IP without rotating",
     )
     mode.add_argument(
         "-r",
