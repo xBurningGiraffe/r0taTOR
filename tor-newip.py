@@ -25,10 +25,10 @@ from typing import Callable, Dict, List, Tuple
 COOKIE = pathlib.Path("/run/tor/control.authcookie")
 
 CONTROL_HOST = "127.0.0.1"
-CONTROL_PORT = 9051
+CONTROL_PORT = 19051
 
 SOCKS_HOST = "127.0.0.1"
-SOCKS_PORT = 9050
+SOCKS_PORT = 19050
 
 NETWORK_TIMEOUT = 15.0
 
