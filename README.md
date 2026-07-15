@@ -6,10 +6,10 @@ run command-line tools through `proxychains`.
 
 Contents
 --------
-1. tor-newip.py        – Python 3 helper that issues SIGNAL NEWNYM
+1. tor-newip.py        – Python 3 helper for rotating and inspecting Tor exit IPs
 2. tor-newip.service   – oneshot systemd unit that runs the helper
 3. tor-newip.timer     – systemd timer that fires the service every 60 s
-4. README.txt          – this file
+4. README.md           – this file
 
 How it works
 ------------
@@ -19,6 +19,8 @@ How it works
   1. Authenticates with Tor’s control port via the 32-byte cookie.
   2. Sends `SIGNAL NEWNYM`, forcing Tor to build new circuits.
 * New TCP sockets opened after that rotate out on a brand-new exit IP.
+* IP inspection requests are sent directly through Tor's local SOCKS5 proxy
+  and verified using the Tor Project IP-check API.
 
 Prerequisites
 -------------
@@ -48,3 +50,38 @@ sudo systemctl restart tor
 sudo cp tor-newip.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now tor-newip.timer
+```
+
+Usage
+-----
+Rotate the Tor circuit. This remains the default behavior used by the systemd
+service and timer:
+
+```bash
+tor-newip
+```
+
+Display the current Tor exit IP without rotating the circuit:
+
+```bash
+tor-newip --ip
+# Short form
+tor-newip -i
+```
+
+Rotate the circuit, then display the old and new exit IPs:
+
+```bash
+tor-newip --rotate-and-show
+# Short form
+tor-newip -r
+```
+
+Change the delay before checking the new IP:
+
+```bash
+tor-newip --rotate-and-show --wait 8
+```
+
+The IP-check modes fail rather than reporting an address when the Tor Project
+API does not confirm that the request originated from the Tor network.
